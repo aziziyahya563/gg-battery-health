@@ -104,7 +104,7 @@ if ($healthPercent -ge 80) {
     $statusColor = "#ef4444" # Red
 }
 
-$timestamp = (Get-Date).ToString("MMM dd, yyyy â€¢ hh:mm tt")
+$timestamp = (Get-Date).ToString("MMM dd, yyyy | hh:mm tt")
 
 # Build Dashboard HTML
 $htmlContent = @"
@@ -236,7 +236,7 @@ $htmlContent = @"
         </div>
 
         <div class="footer">
-            Generated on $timestamp â€¢ $osName<br>
+            Generated on $timestamp &bull; $osName<br>
             <span class="credits">Script made by $authorName</span>
         </div>
     </div>
