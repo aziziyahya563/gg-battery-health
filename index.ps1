@@ -44,53 +44,9 @@ if ($designCap -gt 0) {
     $healthPercent = 0
 }
 
-# Conversion Helper for Runtime
-function ConvertTo-Hours ($timeStr) {
-    if ([string]::IsNullOrWhiteSpace($timeStr) -or $timeStr -eq "-" -or $timeStr -like "*P0DT0H0M*") { return $null }
-    try {
-        $ts = [System.Xml.XmlConvert]::ToTimeSpan($timeStr)
-        if ($ts.TotalHours -gt 0.2 -and $ts.TotalHours -lt 40) {
-            return [math]::Round($ts.TotalHours, 1)
-        }
-    } catch {
-        try {
-            $sec = [double]$timeStr
-            $hrs = $sec / 3600
-            if ($hrs -gt 0.2 -and $hrs -lt 40) { return [math]::Round($hrs, 1) }
-        } catch {}
-    }
-    return $null
-}
-
-# Try Parsing Windows Time Estimates
-$timeEstimates = $xmlData.BatteryReport.HistoryTimeEstimates.TimeEstimate
-$currHours = $null
-$origHours = $null
-
-if ($timeEstimates) {
-    foreach ($est in ($timeEstimates | Select-Object -Last 10 -First 10)) {
-        if (-not $currHours) { $currHours = ConvertTo-Hours $est.FullCharge }
-        if (-not $origHours) { $origHours = ConvertTo-Hours $est.DesignCapacity }
-    }
-}
-
-# Fallback: Estimate dynamically based on Wh capacity (~10W average load) if history is empty
+# Calculate capacity in Wh
 $fullWh = [math]::Round($fullCap / 1000, 1)
 $designWh = [math]::Round($designCap / 1000, 1)
-
-if (-not $currHours -and $fullWh -gt 0) {
-    $currHours = [math]::Round($fullWh / 10, 1) # Assumes ~10W avg work load
-    $origHours = [math]::Round($designWh / 10, 1)
-    $runtimeSubtext = "Estimated from total Wh capacity"
-} else {
-    if ($origHours -and $origHours -gt 0) {
-        $runtimeSubtext = "vs. ~$origHours hrs when brand new"
-    } else {
-        $runtimeSubtext = "Based on recent usage history"
-    }
-}
-
-$runtimeDisplay = "~$currHours hrs"
 
 # Determine status colors
 if ($healthPercent -ge 80) {
@@ -179,11 +135,7 @@ $htmlContent = @"
             border-radius: 10px;
             text-align: center;
         }
-        .stat-box.full-width {
-            grid-column: span 2;
-            background-color: #f0fdf4;
-            border: 1px solid #bbf7d0;
-        }
+
         .stat-title { font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase; }
         .stat-value { font-size: 1.25rem; font-weight: 700; color: #0f172a; margin-top: 4px; }
         .stat-note { font-size: 0.72rem; color: #64748b; margin-top: 2px; }
@@ -218,11 +170,7 @@ $htmlContent = @"
         </div>
 
         <div class="stats-grid">
-            <div class="stat-box full-width">
-                <div class="stat-title">Estimated Full Charge Runtime</div>
-                <div class="stat-value">$runtimeDisplay</div>
-                <div class="stat-note">$runtimeSubtext</div>
-            </div>
+
             <div class="stat-box">
                 <div class="stat-title">Current Max</div>
                 <div class="stat-value">$fullWh Wh</div>
