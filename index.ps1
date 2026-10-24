@@ -1,3 +1,8 @@
+# Ensure UTF-8 output encoding for terminal characters
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {}
+
 # Customization Options
 $authorName = "Azizi Yahya"
 
@@ -88,11 +93,30 @@ if (-not $battery) {
     return
 }
 
-# Extract Capacities
+# Extract Capacities and Battery Details
 $designCap = [double]$battery.DesignCapacity
 $fullCap = [double]$battery.FullChargeCapacity
 $batteryName = if ($battery.Name) { $battery.Name } else { "Standard Battery" }
 $manufacturer = if ($battery.Manufacturer) { $battery.Manufacturer } else { "OEM" }
+$chemistry = if ($battery.Chemistry) { $battery.Chemistry } else { "LION" }
+$cycleCount = if ($battery.CycleCount -and $battery.CycleCount -ne "0") { $battery.CycleCount } else { $null }
+
+# Extract Device Model from SystemInformation if available
+$systemInfo = $xmlData.BatteryReport.SystemInformation
+$sysMfg = if ($systemInfo.SystemManufacturer) {
+    $systemInfo.SystemManufacturer.Trim() -replace '(?i)\s*(,\s*)?(co\.,?\s*ltd\.?|inc\.?|corp(oration)?\.?)$', ''
+} else { "" }
+$sysModel = if ($systemInfo.SystemProductName) { $systemInfo.SystemProductName.Trim() } else { "" }
+
+if ($sysModel -and $sysModel -ne "System Product Name" -and $sysModel -ne "Default string") {
+    if ($sysMfg -and -not ($sysModel.StartsWith($sysMfg, [System.StringComparison]::OrdinalIgnoreCase))) {
+        $deviceModel = "$sysMfg $sysModel"
+    } else {
+        $deviceModel = $sysModel
+    }
+} else {
+    $deviceModel = $env:COMPUTERNAME
+}
 
 # Calculate Health Percentage
 if ($designCap -gt 0) {
@@ -110,12 +134,15 @@ $designWh = [math]::Round($designCap / 1000, 1)
 if ($healthPercent -ge 80) {
     $statusText = "Good / Healthy"
     $statusColor = "#10b981" # Green
+    $cliColor = "Green"
 } elseif ($healthPercent -ge 60) {
     $statusText = "Fair (Degraded)"
     $statusColor = "#f59e0b" # Orange
+    $cliColor = "Yellow"
 } else {
     $statusText = "Poor (Service Recommended)"
     $statusColor = "#ef4444" # Red
+    $cliColor = "Red"
 }
 
 $timestamp = (Get-Date).ToString("MMM dd, yyyy | hh:mm tt")
@@ -216,7 +243,7 @@ $htmlContent = @"
     <div class="card-container">
         <div class="header">
             <h1>Battery Health Overview</h1>
-            <p>$manufacturer $batteryName</p>
+            <p>$deviceModel &bull; $manufacturer $batteryName</p>
         </div>
 
         <div class="health-ring-container">
@@ -262,11 +289,74 @@ try {
 # Cleanup temporary XML
 Remove-Item $xmlPath -ErrorAction SilentlyContinue
 
-Write-Host "Battery Health Report generated: $htmlPath" -ForegroundColor Green
+# Display formatted CLI summary card
+$bTL = [string][char]0x250C # ┌
+$bBL = [string][char]0x2514 # └
+$bH  = [string][char]0x2500 # ─
+$bV  = [string][char]0x2502 # │
+$blockFull  = [string][char]0x2588 # █
+$blockEmpty = [string][char]0x2591 # ░
+
+$totalBarLen = 20
+$filledCount = [int][math]::Round(($healthPercent / 100) * $totalBarLen)
+if ($filledCount -gt $totalBarLen) { $filledCount = $totalBarLen }
+if ($filledCount -lt 0) { $filledCount = 0 }
+$bar = ($blockFull * $filledCount) + ($blockEmpty * ($totalBarLen - $filledCount))
+
+Write-Host ""
+Write-Host "  $bTL$($bH * 2) " -NoNewline -ForegroundColor Cyan
+Write-Host "Battery Health Dashboard" -NoNewline -ForegroundColor White
+Write-Host " $($bH * 32)" -ForegroundColor Cyan
+
+Write-Host "  $bV" -ForegroundColor Cyan
+Write-Host "  $bV  " -NoNewline -ForegroundColor Cyan
+Write-Host "Device      : " -NoNewline -ForegroundColor DarkGray
+Write-Host "$deviceModel" -NoNewline -ForegroundColor White
+Write-Host " ($osName)" -ForegroundColor DarkGray
+
+Write-Host "  $bV  " -NoNewline -ForegroundColor Cyan
+Write-Host "Battery     : " -NoNewline -ForegroundColor DarkGray
+Write-Host "$manufacturer $batteryName" -NoNewline -ForegroundColor White
+if ($chemistry) {
+    Write-Host " [$chemistry]" -ForegroundColor DarkGray
+} else {
+    Write-Host ""
+}
+
+Write-Host "  $bV" -ForegroundColor Cyan
+Write-Host "  $bV  " -NoNewline -ForegroundColor Cyan
+Write-Host "Health      : " -NoNewline -ForegroundColor DarkGray
+Write-Host "$healthPercent% " -NoNewline -ForegroundColor $cliColor
+Write-Host "[$bar] " -NoNewline -ForegroundColor $cliColor
+Write-Host "($statusText)" -ForegroundColor $cliColor
+
+Write-Host "  $bV  " -NoNewline -ForegroundColor Cyan
+Write-Host "Capacity    : " -NoNewline -ForegroundColor DarkGray
+Write-Host "$fullWh Wh " -NoNewline -ForegroundColor White
+Write-Host "[$fullCap mWh]" -NoNewline -ForegroundColor DarkGray
+Write-Host " / " -NoNewline -ForegroundColor DarkGray
+Write-Host "$designWh Wh " -NoNewline -ForegroundColor White
+Write-Host "[$designCap mWh] (Design)" -ForegroundColor DarkGray
+
+if ($cycleCount) {
+    Write-Host "  $bV  " -NoNewline -ForegroundColor Cyan
+    Write-Host "Cycle Count : " -NoNewline -ForegroundColor DarkGray
+    Write-Host "$cycleCount cycles" -ForegroundColor White
+}
+
+Write-Host "  $bV" -ForegroundColor Cyan
+Write-Host "  $bV  " -NoNewline -ForegroundColor Cyan
+Write-Host "Report HTML : " -NoNewline -ForegroundColor DarkGray
+Write-Host "$htmlPath" -ForegroundColor Green
+
+Write-Host "  $bBL$($bH * 58)" -ForegroundColor Cyan
+Write-Host ""
 
 # Open generated file in default web browser
 try {
     Start-Process $htmlPath
+    Write-Host "  Opened report in default browser." -ForegroundColor DarkGray
+    Write-Host ""
 } catch {
-    Write-Warning "Report generated at '$htmlPath' but could not be launched automatically."
+    Write-Warning "Could not automatically open the browser. You can manually view the report at: $htmlPath"
 }
