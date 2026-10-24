@@ -10,8 +10,66 @@ if ($rawOs -match "(Windows\s+\d+)") {
 }
 
 # Define output locations
-$xmlPath = "$env:TEMP\battery_report.xml"
-$htmlPath = "$env:USERPROFILE\Desktop\Battery_Health_Report.html"
+$xmlPath = Join-Path $env:TEMP "battery_report.xml"
+$reportFileName = "Battery_Health_Report.html"
+
+# Resolve Desktop directory dynamically (handles OneDrive backup, Known Folder Move, and custom shell folders)
+$desktopCandidates = @(
+    [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::Desktop),
+    $(
+        $regVal = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -ErrorAction SilentlyContinue).Desktop
+        if ($regVal) { [System.Environment]::ExpandEnvironmentVariables($regVal) }
+    ),
+    $(
+        $regGuid = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -ErrorAction SilentlyContinue).'{754AC886-DF64-4C6E-8656-D4924A49A5D1}'
+        if ($regGuid) { [System.Environment]::ExpandEnvironmentVariables($regGuid) }
+    ),
+    $(if ($env:OneDrive) { Join-Path $env:OneDrive "Desktop" }),
+    $(if ($env:OneDriveConsumer) { Join-Path $env:OneDriveConsumer "Desktop" }),
+    $(if ($env:OneDriveCommercial) { Join-Path $env:OneDriveCommercial "Desktop" }),
+    "$env:USERPROFILE\Desktop"
+)
+
+$outputDir = $null
+foreach ($candidate in $desktopCandidates) {
+    if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -Path $candidate -PathType Container)) {
+        $outputDir = $candidate
+        break
+    }
+}
+
+# Fallback: If no existing Desktop directory is found, try creating standard Desktop or fallback to Documents, Downloads, UserProfile, or TEMP
+if (-not $outputDir) {
+    $fallbackCandidates = @(
+        "$env:USERPROFILE\Desktop",
+        [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::MyDocuments),
+        "$env:USERPROFILE\Documents",
+        "$env:USERPROFILE\Downloads",
+        $env:USERPROFILE,
+        $env:TEMP
+    )
+
+    foreach ($candidate in $fallbackCandidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        if (-not (Test-Path -Path $candidate)) {
+            try {
+                New-Item -ItemType Directory -Path $candidate -Force -ErrorAction Stop | Out-Null
+            } catch {
+                continue
+            }
+        }
+        if (Test-Path -Path $candidate -PathType Container) {
+            $outputDir = $candidate
+            break
+        }
+    }
+}
+
+if (-not $outputDir) {
+    $outputDir = $env:TEMP
+}
+
+$htmlPath = Join-Path $outputDir $reportFileName
 
 # Generate Windows XML battery report
 powercfg /batteryreport /xml /output $xmlPath | Out-Null
@@ -192,11 +250,23 @@ $htmlContent = @"
 </html>
 "@
 
-# Write HTML File
-$htmlContent | Out-File -FilePath $htmlPath -Encoding utf8
+# Write HTML File with fallback handling
+try {
+    $htmlContent | Out-File -FilePath $htmlPath -Encoding utf8 -ErrorAction Stop
+} catch {
+    # If writing to the preferred location fails (e.g., permissions or folder locks), fallback to TEMP
+    $htmlPath = Join-Path $env:TEMP $reportFileName
+    $htmlContent | Out-File -FilePath $htmlPath -Encoding utf8
+}
 
 # Cleanup temporary XML
 Remove-Item $xmlPath -ErrorAction SilentlyContinue
 
+Write-Host "Battery Health Report generated: $htmlPath" -ForegroundColor Green
+
 # Open generated file in default web browser
-Start-Process $htmlPath
+try {
+    Start-Process $htmlPath
+} catch {
+    Write-Warning "Report generated at '$htmlPath' but could not be launched automatically."
+}
